@@ -226,7 +226,7 @@ def _is_claude_model(model: str | None) -> bool:
     return "claude" in (model or "").lower()
 
 
-_FAST_MODE_SUPPORTED_SUBSTRINGS = ("opus-4-8", "opus-4.8", "opus-5")
+_FAST_MODE_SUPPORTED_SUBSTRINGS = ("claude",)
 
 # ── Max output token limits per Anthropic model ───────────────────────
 # Source: Anthropic docs + Cline model catalog.  Anthropic's API requires
@@ -433,29 +433,13 @@ def _forbids_sampling_params(model: str) -> bool:
 
 
 def _supports_fast_mode(model: str) -> bool:
-    """Return True for models that accept the ``speed: "fast"`` request param.
+    """Return True for any model ID containing ``claude``.
 
-    Per the Anthropic fast-mode docs (research preview), the ``speed`` param
-    is supported on Opus 4.8 and Opus 5 — Claude API only. The matrix has
-    changed with nearly every Opus release, in both directions:
-
-    - Opus 4.6 HAD fast mode at launch and LOST it (2026-06-29): requests
-      with ``speed: "fast"`` do not error — they silently run at standard
-      speed and bill standard rates (``usage.speed: "standard"``). Keeping
-      4.6 in this allowlist would show users a fast toggle that does
-      nothing.
-    - Opus 4.7 never had it and hard-400s on the parameter.
-    - Dedicated ``…-fast`` model ids (e.g. OpenRouter's
-      ``claude-opus-4.8-fast``) select fast inference via the model field
-      itself and must NOT also receive the speed parameter.
-
-    Keep this an explicit allowlist rather than a version-floor check so a
-    model that drops fast mode again fails closed (standard speed) instead
-    of silently 400'ing.
+    Hermes intentionally forwards the Anthropic-compatible ``speed=fast``
+    parameter for relays and custom endpoints too. The endpoint is responsible
+    for accepting, translating, or rejecting that provider-specific field.
     """
-    if "-fast" in model:
-        return False
-    return any(v in model for v in _FAST_MODE_SUPPORTED_SUBSTRINGS)
+    return any(v in (model or "").lower() for v in _FAST_MODE_SUPPORTED_SUBSTRINGS)
 
 
 # Beta headers for enhanced features that are safe on ordinary/native Anthropic
@@ -1163,18 +1147,12 @@ def build_anthropic_kwargs(
         for _sampling_key in ("temperature", "top_p", "top_k"):
             kwargs.pop(_sampling_key, None)
 
-    # ── Fast mode (Opus 4.8 / Opus 5) ────────────────────────────────
-    # Adds extra_body.speed="fast" + the fast-mode beta header for ~2.5x
-    # output speed. Per Anthropic docs the speed param is supported on
-    # Opus 4.8 and Opus 5 (research preview); Opus 4.7 400s on it and
-    # Opus 4.6 silently ignores it (standard speed, standard billing).
-    # Only for native Anthropic endpoints — third-party providers would
-    # reject the unknown beta header and speed parameter, and Anthropic
-    # itself scopes fast mode to the Claude API (not Bedrock/Vertex/
-    # Foundry).
+    # ── Fast mode (any Claude model) ─────────────────────────────────
+    # Forward extra_body.speed="fast" + the fast-mode beta header for every
+    # Claude model, including Claude-compatible relay/custom endpoints. The
+    # endpoint is responsible for handling the provider-specific parameter.
     if (
         fast_mode
-        and not _is_third_party_anthropic_endpoint(base_url)
         and _supports_fast_mode(model)
     ):
         kwargs.setdefault("extra_body", {})["speed"] = "fast"

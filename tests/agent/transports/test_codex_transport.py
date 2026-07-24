@@ -1382,15 +1382,14 @@ class TestCodexTransportXaiReasoningEffort:
 
 
 class TestCodexTransportXaiServiceTierStrip:
-    """xAI Responses API rejects ``service_tier`` (#28490).
+    """xAI Responses keeps only an explicit fast tier for Grok models.
 
-    ``resolve_fast_mode_overrides`` only returns ``service_tier`` for
-    OpenAI fast-eligible models, so on paper the field should never
-    reach a Grok request.  But ``self.service_tier`` lingers across
+    ``resolve_fast_mode_overrides`` forwards the priority tier for every
+    keyword-matched model, while ``self.service_tier`` can linger across
     model switches and can also be set directly via ``agent.service_tier``
-    in config.yaml — both leak paths plumb through ``request_overrides``
-    and would 400 against xAI's ``/v1/responses``.
-    Strip defensively when targeting xAI.
+    in config.yaml. Keep the safe xAI boundary: only a Grok model with the
+    explicit priority value receives the field; unsupported values remain
+    stripped.
     """
 
     @pytest.fixture
@@ -1398,22 +1397,18 @@ class TestCodexTransportXaiServiceTierStrip:
         from agent.transports.codex import ResponsesApiTransport
         return ResponsesApiTransport()
 
-    def test_xai_strips_service_tier_from_request_overrides(self, transport):
-        """Headline #28490 case: service_tier=priority leaks through
-        request_overrides, must not reach the xAI request body."""
+    def test_xai_preserves_priority_service_tier_for_any_grok_model(self, transport):
+        """A keyword-matched Grok model receives the fast tier."""
         kw = transport.build_kwargs(
-            model="grok-4.3",
+            model="grok-4.3-custom",
             messages=[{"role": "user", "content": "hi"}],
             tools=[],
             is_xai_responses=True,
             request_overrides={"service_tier": "priority"},
         )
-        assert "service_tier" not in kw, (
-            f"service_tier must be stripped on xAI requests, "
-            f"got {kw.get('service_tier')!r}"
-        )
+        assert kw.get("service_tier") == "priority"
 
-    def test_grok_46_preserves_priority_service_tier(self, transport):
+    def test_aggregator_prefixed_grok_preserves_priority_service_tier(self, transport):
         kw = transport.build_kwargs(
             model="x-ai/grok-4.6-latest",
             messages=[{"role": "user", "content": "hi"}],
@@ -1423,6 +1418,16 @@ class TestCodexTransportXaiServiceTierStrip:
         )
 
         assert kw.get("service_tier") == "priority"
+
+    def test_non_grok_xai_still_strips_service_tier(self, transport):
+        kw = transport.build_kwargs(
+            model="gpt-5.4",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+            is_xai_responses=True,
+            request_overrides={"service_tier": "priority"},
+        )
+        assert "service_tier" not in kw
 
     def test_grok_46_strips_non_priority_service_tier(self, transport):
         kw = transport.build_kwargs(

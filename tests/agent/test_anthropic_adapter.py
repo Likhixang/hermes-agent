@@ -983,26 +983,19 @@ class TestBuildAnthropicKwargs:
 
 
     def test_supports_fast_mode_predicate(self):
-        """The speed-param allowlist tracks the live fast-mode docs.
-
-        Per https://platform.claude.com/docs/en/build-with-claude/fast-mode:
-        Opus 4.8 and Opus 5 support ``speed: "fast"``. Opus 4.6 LOST fast
-        mode (param silently ignored → standard speed at standard billing);
-        Opus 4.7 hard-400s. Dedicated ``…-fast`` model ids select fast
-        inference via the model field and must not also get the param.
-        """
+        """Every Claude model ID is eligible for the forwarded speed key."""
         from agent.anthropic_adapter import _supports_fast_mode
         assert _supports_fast_mode("claude-opus-4-8") is True
         assert _supports_fast_mode("claude-opus-4.8") is True
         assert _supports_fast_mode("anthropic/claude-opus-4-8") is True
         assert _supports_fast_mode("claude-opus-5") is True
         assert _supports_fast_mode("anthropic/claude-opus-5") is True
-        assert _supports_fast_mode("claude-opus-4-6") is False
-        assert _supports_fast_mode("anthropic/claude-opus-4-6") is False
-        assert _supports_fast_mode("claude-opus-4-7") is False
-        assert _supports_fast_mode("claude-opus-4-8-fast") is False
-        assert _supports_fast_mode("claude-sonnet-4-6") is False
-        assert _supports_fast_mode("claude-haiku-4-5") is False
+        assert _supports_fast_mode("claude-opus-4-6") is True
+        assert _supports_fast_mode("anthropic/claude-opus-4-6") is True
+        assert _supports_fast_mode("claude-opus-4-7") is True
+        assert _supports_fast_mode("claude-opus-4-8-fast") is True
+        assert _supports_fast_mode("claude-sonnet-4-6") is True
+        assert _supports_fast_mode("claude-haiku-4-5") is True
         assert _supports_fast_mode("") is False
 
     def test_fable_class_models_route_as_adaptive_thinking(self):
@@ -1064,8 +1057,8 @@ class TestBuildAnthropicKwargs:
         for m in ("k30", "k3000-chat", "keras-3"):
             assert _model_name_is_kimi_family(m) is False, m
 
-    def test_fast_mode_omitted_for_unsupported_model(self):
-        """fast_mode=True on Opus 4.7 must NOT inject speed=fast (API 400s)."""
+    def test_fast_mode_forwarded_for_any_claude_model(self):
+        """fast_mode=True forwards speed=fast for every Claude model ID."""
         kwargs = build_anthropic_kwargs(
             model="claude-opus-4-7",
             messages=[{"role": "user", "content": "hi"}],
@@ -1074,11 +1067,9 @@ class TestBuildAnthropicKwargs:
             reasoning_config=None,
             fast_mode=True,
         )
-        # extra_body either absent or doesn't carry "speed"
-        assert "speed" not in kwargs.get("extra_body", {})
-        # No fast-mode beta header should be added either
+        assert kwargs.get("extra_body", {}).get("speed") == "fast"
         beta_header = (kwargs.get("extra_headers") or {}).get("anthropic-beta", "")
-        assert "fast-mode-2026-02-01" not in beta_header
+        assert "fast-mode-2026-02-01" in beta_header
 
 
 

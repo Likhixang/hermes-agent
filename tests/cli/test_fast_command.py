@@ -73,13 +73,13 @@ class TestHandleFastCommand(unittest.TestCase):
         self.assertIsNone(stub.agent)
 
 
-    def test_unsupported_model_does_not_expose_fast(self):
+    def test_non_keyword_model_does_not_expose_fast(self):
         cli_mod = _import_cli()
         stub = SimpleNamespace(
             service_tier=None,
             provider="openai-codex",
             requested_provider="openai-codex",
-            model="gpt-5.3-codex",
+            model="llama-3.3",
             _fast_command_available=lambda: False,
             agent=MagicMock(),
         )
@@ -114,16 +114,27 @@ class TestPriorityProcessingModels(unittest.TestCase):
             assert model_supports_fast_mode(model), f"{model} should support fast mode"
 
 
-    def test_codex_models_excluded(self):
-        """Codex models route through Responses API and don't accept service_tier."""
+    def test_keyword_models_supported_including_codex(self):
+        """Every model containing a requested fast keyword is exposed."""
         from hermes_cli.models import model_supports_fast_mode
 
         for model in ["gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.1-codex-max"]:
-            assert not model_supports_fast_mode(model), f"{model} is codex — should not expose /fast"
+            assert model_supports_fast_mode(model), f"{model} should expose /fast"
+
+        for model in [
+            "relay/my-gpt-compatible",
+            "custom-claude-sonnet",
+            "vendor/grok-legacy",
+            "relay/model:gpt-compatible",
+            "relay/model:claude-compatible",
+            "relay/model:grok-compatible",
+            "VENDOR/custom-GPT-model",
+        ]:
+            assert model_supports_fast_mode(model), f"{model} should expose /fast"
 
 
 
-    def test_grok_46_supports_priority_processing(self):
+    def test_any_grok_model_supports_priority_processing(self):
         from hermes_cli.models import (
             model_supports_fast_mode,
             resolve_fast_mode_overrides,
@@ -131,8 +142,9 @@ class TestPriorityProcessingModels(unittest.TestCase):
 
         assert model_supports_fast_mode("grok-4.6") is True
         assert model_supports_fast_mode("x-ai/grok-4.6-latest") is True
-        assert model_supports_fast_mode("grok-4.5") is False
+        assert model_supports_fast_mode("grok-4.5") is True
         assert resolve_fast_mode_overrides("grok-4.6") == {"service_tier": "priority"}
+        assert resolve_fast_mode_overrides("vendor/grok-legacy") == {"service_tier": "priority"}
 
     def test_resolve_overrides_returns_service_tier(self):
         from hermes_cli.models import resolve_fast_mode_overrides
@@ -176,12 +188,21 @@ class TestFastModeRouting(unittest.TestCase):
         # But request_overrides should be set
         assert route["request_overrides"] == {"service_tier": "priority"}
 
-        # Proxied routes (OpenRouter etc.) strip/400 on the param — never sent.
+        # Relays and custom endpoints receive the requested parameter too.
         stub.base_url = "https://openrouter.ai/api/v1"
         stub.provider = "openrouter"
-        assert cli_mod.HermesCLI._resolve_turn_agent_config(stub, "hi")["request_overrides"] is None
+        assert cli_mod.HermesCLI._resolve_turn_agent_config(stub, "hi")["request_overrides"] == {
+            "service_tier": "priority"
+        }
 
-    def test_turn_route_keeps_primary_runtime_when_model_has_no_fast_backend(self):
+        # BAH/custom OpenAI-compatible routes must receive the same override.
+        stub.base_url = "http://127.0.0.1:8090/v1"
+        stub.provider = "custom:BAH"
+        assert cli_mod.HermesCLI._resolve_turn_agent_config(stub, "hi")["request_overrides"] == {
+            "service_tier": "priority"
+        }
+
+    def test_turn_route_keeps_primary_runtime_for_keyword_model(self):
         cli_mod = _import_cli()
         stub = SimpleNamespace(
             model="gpt-5.3-codex",
@@ -198,7 +219,7 @@ class TestFastModeRouting(unittest.TestCase):
         route = cli_mod.HermesCLI._resolve_turn_agent_config(stub, "hi")
 
         assert route["runtime"]["provider"] == "openrouter"
-        assert route.get("request_overrides") is None
+        assert route["request_overrides"] == {"service_tier": "priority"}
 
 
 class TestAnthropicFastMode(unittest.TestCase):
@@ -218,27 +239,19 @@ class TestAnthropicFastMode(unittest.TestCase):
         assert model_supports_fast_mode("claude-opus-5") is True
         assert model_supports_fast_mode("anthropic/claude-opus-5") is True
 
-    def test_anthropic_unsupported_models_excluded(self):
-        """The speed=fast parameter is gated to Opus 4.8 / Opus 5.
-
-        Per https://platform.claude.com/docs/en/build-with-claude/fast-mode:
-        Opus 4.6 LOST fast mode 2026-06-29 (the param is silently ignored —
-        standard speed at standard billing — so a toggle would do nothing);
-        Opus 4.7 hard-400s; Sonnet/Haiku never had it; dedicated ``…-fast``
-        ids select fast inference via the model field, not the parameter.
-        """
+    def test_any_claude_model_is_supported(self):
+        """Every model containing ``claude`` receives the Anthropic fast key."""
         from hermes_cli.models import model_supports_fast_mode
 
-        assert model_supports_fast_mode("claude-sonnet-4-6") is False
-        assert model_supports_fast_mode("claude-sonnet-4.6") is False
-        assert model_supports_fast_mode("claude-haiku-4-5") is False
-        assert model_supports_fast_mode("claude-opus-4-6") is False
-        assert model_supports_fast_mode("claude-opus-4.6") is False
-        assert model_supports_fast_mode("claude-opus-4-7") is False
-        assert model_supports_fast_mode("claude-opus-4-8-fast") is False
-        assert model_supports_fast_mode("anthropic/claude-opus-4.8-fast") is False
-        assert model_supports_fast_mode("anthropic/claude-sonnet-4.6") is False
-        assert model_supports_fast_mode("anthropic/claude-opus-4-7") is False
+        for model in [
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "anthropic/claude-opus-4.8-fast",
+            "relay/custom-claude-model",
+        ]:
+            assert model_supports_fast_mode(model), f"{model} should expose /fast"
 
 
 
@@ -255,14 +268,14 @@ class TestAnthropicFastMode(unittest.TestCase):
 
 
 
-    def test_fast_command_hidden_for_anthropic_sonnet(self):
-        """Sonnet doesn't support fast mode (Opus 4.8/5 only) — /fast must be hidden."""
+    def test_fast_command_available_for_anthropic_sonnet(self):
+        """Any Claude model name exposes the fast toggle."""
         cli_mod = _import_cli()
         stub = SimpleNamespace(
             provider="anthropic", requested_provider="anthropic",
             model="claude-sonnet-4-6", agent=None,
         )
-        assert cli_mod.HermesCLI._fast_command_available(stub) is False
+        assert cli_mod.HermesCLI._fast_command_available(stub) is True
 
 
 
@@ -321,8 +334,8 @@ class TestAnthropicFastModeAdapter(unittest.TestCase):
         assert "speed" not in kwargs
         assert "extra_headers" not in kwargs
 
-    def test_fast_mode_skipped_for_third_party_endpoint(self):
-        from agent.anthropic_adapter import build_anthropic_kwargs
+    def test_fast_mode_forwarded_to_third_party_endpoint(self):
+        from agent.anthropic_adapter import build_anthropic_kwargs, _FAST_MODE_BETA
 
         kwargs = build_anthropic_kwargs(
             model="claude-opus-4-8",
@@ -333,10 +346,9 @@ class TestAnthropicFastModeAdapter(unittest.TestCase):
             fast_mode=True,
             base_url="https://api.minimax.io/anthropic/v1",
         )
-        # Third-party endpoints should NOT get speed or fast-mode beta
-        assert kwargs.get("extra_body", {}).get("speed") is None
+        assert kwargs.get("extra_body", {}).get("speed") == "fast"
         assert "speed" not in kwargs
-        assert "extra_headers" not in kwargs
+        assert _FAST_MODE_BETA in kwargs["extra_headers"].get("anthropic-beta", "")
 
 
 

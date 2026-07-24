@@ -823,15 +823,12 @@ class ResponsesApiTransport(ProviderTransport):
             else:
                 kwargs.pop("prompt_cache_key", None)
 
-        # Older xAI Responses models reject ``service_tier`` (HTTP 400
-        # "Argument not supported: service_tier"). Grok 4.6 accepts Priority
-        # Processing, but continue stripping stale or unsupported tier values
-        # on every other xAI path. See #28490 and #84799.
+        # xAI Responses receives the requested tier for every Grok model. The
+        # model-name policy is intentionally broad: relays can expose newer or
+        # aliased Grok IDs before Hermes knows their exact family.
         if is_xai_responses:
-            from agent.model_metadata import is_grok_46_family
-
             if not (
-                is_grok_46_family(model)
+                "grok" in str(model or "").lower()
                 and kwargs.get("service_tier") == "priority"
             ):
                 kwargs.pop("service_tier", None)

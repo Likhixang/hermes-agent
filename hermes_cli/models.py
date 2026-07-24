@@ -4081,17 +4081,18 @@ def provider_label(provider: Optional[str]) -> str:
     return _PROVIDER_LABELS.get(normalized, original or "OpenRouter")
 
 
-# Models that support OpenAI Priority Processing (service_tier="priority").
-# See https://openai.com/api-priority-processing/ for the canonical list.
+# Models that Hermes should mark as fast-capable.
 #
-# Pattern-based matching — any OpenAI flagship model (gpt-*, o1*, o3*, o4*)
-# is assumed to support Priority Processing. service_tier=priority is silently
-# ignored by non-OpenAI endpoints (OpenRouter/Copilot/opencode-zen proxies
-# strip the field), so false positives are harmless. Codex-series models
-# (gpt-5-codex, gpt-5.3-codex, etc.) are excluded — they don't expose the
-# service_tier parameter through the Codex Responses API.
+# The configured provider may be a relay or a custom OpenAI-compatible
+# endpoint, so provider identity cannot tell us whether the endpoint accepts
+# the provider-specific fast parameter. Match the model name instead and let
+# the configured endpoint decide what ``service_tier``/``speed`` means.
+#
+# Keep the historical o1/o3/o4 support as well as the user-requested broad
+# substring matching for gpt/claude/grok. This intentionally includes Codex
+# and model IDs whose names contain ``-fast``: the user explicitly opted into
+# forwarding the fast parameter for any matching model.
 _OPENAI_FAST_MODE_PREFIXES: tuple[str, ...] = (
-    "gpt-",
     "o1",
     "o3",
     "o4",
@@ -4099,25 +4100,22 @@ _OPENAI_FAST_MODE_PREFIXES: tuple[str, ...] = (
 
 
 def _is_openai_fast_model(model_id: Optional[str]) -> bool:
-    """Return True if the model is an OpenAI flagship eligible for Priority Processing."""
+    """Return True when the model name requests OpenAI-style fast processing."""
     raw = _strip_vendor_prefix(str(model_id or ""))
     base = raw.split(":")[0]
     if not base:
         return False
-    # Exclude Codex-series — they route through the Codex Responses API
-    # which doesn't accept service_tier.
-    if "codex" in base:
-        return False
-    return any(base.startswith(prefix) for prefix in _OPENAI_FAST_MODE_PREFIXES)
+    return "gpt" in raw or any(
+        base.startswith(prefix) for prefix in _OPENAI_FAST_MODE_PREFIXES
+    )
 
 
 # Models that support Anthropic Fast Mode (speed="fast").
 # See https://platform.claude.com/docs/en/build-with-claude/fast-mode
 #
-# Pattern-based matching — any claude-* model is eligible. The anthropic
-# adapter gates speed=fast on native Anthropic endpoints only (see
-# _is_third_party_anthropic_endpoint in agent/anthropic_adapter.py), so
-# third-party proxies that would reject the beta header are protected.
+# Pattern-based matching — any model containing a requested keyword is
+# eligible. The configured endpoint decides whether it accepts or translates
+# the provider-specific fast parameter.
 
 
 def _strip_vendor_prefix(model_id: str) -> str:
@@ -4130,64 +4128,37 @@ def _strip_vendor_prefix(model_id: str) -> str:
 
 def model_supports_fast_mode(model_id: Optional[str]) -> bool:
     """Return whether Hermes should expose the /fast toggle for this model."""
-    from agent.model_metadata import is_grok_46_family
-
     return (
         _is_anthropic_fast_model(model_id)
         or _is_openai_fast_model(model_id)
-        or is_grok_46_family(str(model_id or ""))
+        or _is_grok_fast_model(model_id)
     )
 
 
 def _is_anthropic_fast_model(model_id: Optional[str]) -> bool:
-    """Return True if the model accepts the Anthropic Fast Mode ``speed`` param.
-
-    This gates the *speed=fast request parameter*, which Anthropic supports
-    on Opus 4.8 and Opus 5 (research preview, Claude API only). It is
-    deliberately NOT a general "is this a fast model" check:
-
-    - Opus 4.6 had fast mode at launch and LOST it (2026-06-29) — the param
-      is silently ignored (standard speed, standard billing), so exposing a
-      toggle for it would show users a switch that does nothing.
-    - Opus 4.7 hard-400s on the parameter.
-    - Dedicated ``…-fast`` model ids (e.g. OpenRouter's
-      ``claude-opus-4.8-fast``) select fast inference via the model field
-      and must not also receive the speed parameter.
-
-    Keep this in lock-step with ``agent.anthropic_adapter._supports_fast_mode``
-    so the UI never shows a Fast toggle that the runtime would drop.
-    """
+    """Return True when the model name requests Anthropic-style fast processing."""
     raw = _strip_vendor_prefix(str(model_id or ""))
-    base = raw.split(":")[0]
-    if not base.startswith("claude-"):
-        return False
-    if "-fast" in base:
-        return False
-    return any(v in base for v in ("opus-4-8", "opus-4.8", "opus-5"))
+    return "claude" in raw
+
+
+def _is_grok_fast_model(model_id: Optional[str]) -> bool:
+    """Return True when the model name requests xAI-style fast processing."""
+    raw = _strip_vendor_prefix(str(model_id or ""))
+    return "grok" in raw
 
 
 def _fast_mode_route_supported(
     model_id: Optional[str], provider: Optional[str], base_url: Optional[str]
 ) -> bool:
-    """Only the first-party endpoint that bills for fast mode may receive its params.
+    """Return whether a keyword-matched model may receive its fast parameter.
 
-    OpenRouter, Nous, Copilot, Azure, Bedrock, and custom base_urls either
-    strip ``service_tier``/``speed`` (charging nothing) or 400 on them.
+    Fast mode is deliberately endpoint-agnostic. Relays and custom providers
+    may implement the same OpenAI/Anthropic-compatible parameters, and the
+    user explicitly opted into forwarding them. ``provider`` and ``base_url``
+    remain in the signature for callers that pass route metadata.
     """
-    from urllib.parse import urlparse
-
-    from agent.model_metadata import is_grok_46_family
-
-    if _is_anthropic_fast_model(model_id):
-        allowed = {"anthropic": "api.anthropic.com"}
-    elif is_grok_46_family(str(model_id or "")):
-        allowed = {"xai": "api.x.ai"}
-    else:
-        allowed = {"openai": "api.openai.com", "openai-codex": "chatgpt.com"}
-    if provider and normalize_provider(provider) not in allowed:
-        return False
-    host = (urlparse(str(base_url or "")).hostname or "").lower()
-    return not host or host in allowed.values()
+    del provider, base_url
+    return model_supports_fast_mode(model_id)
 
 
 def resolve_fast_mode_overrides(
@@ -4201,12 +4172,13 @@ def resolve_fast_mode_overrides(
     Returns provider-appropriate overrides:
     - OpenAI models: ``{"service_tier": "priority"}`` (Priority Processing)
     - Anthropic models: ``{"speed": "fast"}`` (Anthropic Fast Mode beta)
-    - Grok 4.6: ``{"service_tier": "priority"}`` (xAI Priority Processing)
+    - Grok models: ``{"service_tier": "priority"}`` (xAI-compatible
+      Priority Processing)
 
-    When ``provider``/``base_url`` are given the result is also gated on the
-    route (see ``_fast_mode_route_supported``) so proxies never see the
-    params. This is the single fast-mode gate for static ``/fast fast`` and
-    the bounded ``auto``/``cold`` windows in ``agent.fast_mode``.
+    When ``provider``/``base_url`` are given, they are retained as route
+    metadata but do not disable forwarding. This is the single fast-mode gate
+    for static ``/fast fast`` and the bounded ``auto``/``cold`` windows in
+    ``agent.fast_mode``.
 
     The overrides are injected into the API request kwargs by
     ``build_api_kwargs`` — each API path handles its own keys
