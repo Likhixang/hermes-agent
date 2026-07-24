@@ -2941,7 +2941,17 @@ def _resolve_gateway_model_context(model: Optional[str] = None) -> _GatewayModel
 
     try:
         runtime = _resolve_runtime_agent_kwargs()
-        provider = runtime.get("provider") or provider
+        _rt_provider = runtime.get("provider") or ""
+        if _rt_provider == "custom":
+            # Preserve the named custom provider for display (i.e. the real
+            # configured provider name rather than the generic "custom" that
+            # the runtime normaliser always returns for custom_providers
+            # entries).
+            _req = (runtime.get("requested_provider") or "").removeprefix("custom:").strip()
+            if _req:
+                provider = _req.upper()
+        else:
+            provider = _rt_provider or provider
         base_url = runtime.get("base_url") or base_url
         api_key = runtime.get("api_key")
     except Exception:
@@ -2985,6 +2995,14 @@ def _resolve_gateway_model_context(model: Optional[str] = None) -> _GatewayModel
         provider=provider or "",
         custom_providers=custom_providers,
     )
+
+    # Normalise the configured provider for display: the config loader
+    # prefixes unrecognised provider names with "custom:".  Strip that
+    # prefix so the user sees the real provider name even when runtime
+    # resolution is skipped.
+    if provider and str(provider).startswith("custom:"):
+        provider = str(provider)[len("custom:"):]
+
     if config_context_length is not None:
         context_source = "config"
     elif context_length == DEFAULT_FALLBACK_CONTEXT:
@@ -10804,6 +10822,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         return len(notified)
 
     async def _notify_active_sessions_of_shutdown(self) -> None:
+        return  # Suppress shutdown notification — user finds it annoying
         """Send shutdown/restart notifications to active chats and home channels.
 
         Called at the very start of stop() — adapters are still connected so

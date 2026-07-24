@@ -2722,9 +2722,12 @@ def get_model_context_length(
     """Get the context length for a model.
 
     Resolution order:
-    0. Explicit config override (model.context_length or custom_providers per-model)
+    0. (reserved)
+    0a. MoA virtual provider — aggregator slot's real provider+model
     0b. model_overrides config (per-provider+model context_window override)
-    0c. Endpoint-scoped metadata for models validated on one multiplexed endpoint
+    0c. custom_providers per-model override
+    0d. Explicit config override (model.context_length)
+    0e. Endpoint-scoped metadata for models validated on one multiplexed endpoint
     1. Persistent cache (previously discovered via probing).  Nous URLs,
        LM Studio, and Codex OAuth bypass the cache here so their provider
        metadata can be reconciled against the authoritative live source.
@@ -2745,10 +2748,7 @@ def get_model_context_length(
     7. Local server query (before hardcoded defaults for local endpoints)
     8. Hardcoded defaults (broad family patterns, longest-key-first)
     9. Default fallback (256K)"""
-    # 0. Explicit config override — user knows best
-    if config_context_length is not None and isinstance(config_context_length, int) and config_context_length > 0:
-        return config_context_length
-
+    # 0. (reserved — config_context_length check moved to 0d)
     # 0a. MoA virtual provider — ``model`` is a preset name, not a real model,
     # and ``base_url`` is the local virtual endpoint, so every probe below would
     # miss and fall through to the 256K default. The aggregator is the acting
@@ -2817,6 +2817,10 @@ def get_model_context_length(
                 return cp_ctx
         except Exception:
             pass  # fall through to probing
+
+    # 0d. Explicit config override — user knows best, lower than per-model.
+    if config_context_length is not None and isinstance(config_context_length, int) and config_context_length > 0:
+        return config_context_length
 
     # Malformed user-provided URLs (for example an unmatched IPv6 bracket)
     # make urllib.parse raise. Context resolution should treat those as an

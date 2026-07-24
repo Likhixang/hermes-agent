@@ -2568,8 +2568,9 @@ def init_agent(
     agent._custom_providers = _custom_providers
     _merge_custom_provider_extra_body(agent, _custom_providers)
 
-    # Check custom_providers per-model context_length
-    if _config_context_length is None and _custom_providers:
+    # Per-model overrides are more specific than the global model.context_length
+    # and must win when both are set (local patch, see #15779).
+    if _custom_providers:
         try:
             from hermes_cli.config import get_custom_provider_context_length
             _cp_ctx_resolved = get_custom_provider_context_length(

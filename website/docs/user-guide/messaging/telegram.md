@@ -83,7 +83,7 @@ Notes:
 
 Hermes registers its command menu automatically when the Telegram gateway starts. The menu is built from the central slash-command registry plus eligible plugin/skill commands, then capped so Telegram accepts the payload reliably. The default cap is 60 commands — enough to keep all built-in commands plus common skill commands visible.
 
-If you have local or plugin commands that should stay visible in Telegram's `/` picker, prioritize them in `~/.hermes/config.yaml`:
+If you have local, plugin, or skill commands that should stay visible in Telegram's `/` picker, prioritize them in `~/.hermes/config.yaml`:
 
 ```yaml
 platforms:

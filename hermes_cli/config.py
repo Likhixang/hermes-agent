@@ -1517,6 +1517,20 @@ def _normalize_custom_provider_entry(
             normalized_models[model_id.strip()] = model_meta
         if normalized_models:
             normalized["models"] = normalized_models
+    elif isinstance(models, str) and models.strip():
+        # YAML stores inline JSON as a quoted string
+        # (e.g.  models: '{"gpt-5.5":{"context_length":1000000}}')
+        import json as _json
+        try:
+            parsed = _json.loads(models.strip())
+            if isinstance(parsed, dict):
+                normalized["models"] = parsed
+            elif isinstance(parsed, list):
+                normalized["models"] = {
+                    str(m): {} for m in parsed if isinstance(m, str) and m.strip()
+                }
+        except Exception:
+            pass
 
     if models_discovered:
         normalized["models_discovered"] = True

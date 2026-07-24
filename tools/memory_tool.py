@@ -75,7 +75,7 @@ MEMORY_BLOCK_HEADERS = {
     "user": "USER PROFILE (who the user is)",
 }
 
-ENTRY_DELIMITER = "\n§\n"
+ENTRY_DELIMITER = "\n\n"
 
 
 # ---------------------------------------------------------------------------
@@ -807,7 +807,7 @@ class MemoryStore:
         """Split raw memory-file text into stripped, non-empty entries."""
         if not raw.strip():
             return []
-        # Use ENTRY_DELIMITER for consistency with _write_file. Splitting by "§"
+        # Use ENTRY_DELIMITER for consistency with _write_file. Splitting by blank line
         # alone would incorrectly split entries that contain "§" in their content.
         entries = [e.strip() for e in raw.split(ENTRY_DELIMITER)]
         return [e for e in entries if e]
